@@ -1,30 +1,47 @@
 # System Architecture
-## Team: ___________________
-## Date: ___________________
+
+## Team: Single-developer completion (assignment build-out)
+## Date: 2026-03-24
 ## Members and Roles:
-- Corpus Architect: ___________________
-- Pipeline Engineer: ___________________
-- UX Lead: ___________________
-- Prompt Engineer: ___________________
-- QA Lead: ___________________
+- Corpus Architect: (see `data/corpus/`)
+- Pipeline Engineer: `config.py`, `store.py`, `nodes.py`, `graph.py`
+- UX Lead: `src/rag_agent/ui/app.py` (Streamlit)
+- Prompt Engineer: `src/rag_agent/agent/prompts.py`
+- QA Lead: `tests/test_vectorstore.py`, `docs/rubric.md`
 
 ---
 
 ## Architecture Diagram
 
-Replace this section with your team's completed flow chart.
-Export from FigJam, Miro, or draw.io and embed as an image,
-or describe the architecture as an ASCII diagram.
+```
+[.md / .pdf files]  -->  DocumentChunker  -->  DocumentChunk list
+                                                    |
+                                                    v
+                                            VectorStoreManager.ingest
+                                                    |
+                                                    v
+                                     Embedding (sentence-transformers)
+                                                    |
+                                                    v
+                              Chroma PersistentClient + collection (cosine)
+                                                    ^
+                                                    |
+User chat input  -->  LangGraph: query_rewrite  -->  embed_query + collection.query
+                              |                              |
+                              v                              v
+                         retrieval_node  -->  (chunks?)  --+--> should_retry_retrieval
+                              |                            |
+                    no results / below threshold           has results
+                              |                            |
+                              v                            v
+            final_response + AIMessage (guard)          generation_node
+            (END)                                       LLM + SYSTEM_PROMPT
+                                                        |
+                                                        v
+                                                      (END)
+```
 
-The diagram must show:
-- [ ] How a corpus file becomes a chunk
-- [ ] How a chunk becomes an embedding
-- [ ] How duplicate detection fires
-- [ ] How a user query flows through LangGraph to a response
-- [ ] Where the hallucination guard sits in the graph
-- [ ] How conversation memory is maintained across turns
-
-*(replace this line with your diagram image or ASCII art)*
+- **Hallucination guard:** `retrieval_node` returns `no_context_found=True` when the query is empty or no chunk meets `SIMILARITY_THRESHOLD`. `should_retry_retrieval` routes to **END**; `final_response` and an `AIMessage` are produced in `retrieval_node` via `_no_context_payload` so the UI always gets a structured answer without calling the LLM on empty context.
 
 ---
 
@@ -33,38 +50,26 @@ The diagram must show:
 ### Corpus Layer
 
 - **Source files location:** `data/corpus/`
-- **File formats used:**
-  *(which file types did your team ingest — .md, .pdf, or both?)*
-
-- **Landmark papers ingested:**
-  *(list the papers your team located and ingested, one per line)*
-  -
-  -
-  -
-
-- **Chunking strategy:**
-  *(what chunk size and overlap did you choose, and why?
-  e.g. 512 characters with 50 overlap — justify this choice)*
-
+- **File formats used:** Markdown (primary). PDF supported via chunker (`PyPDFLoader`).
+- **Landmark papers ingested:** Referenced in corpus text (Rumelhart et al. 1986; LeCun et al. 1998; Krizhevsky et al. 2012; Elman 1990). PDFs can be added under `data/corpus/` and ingested through the UI.
+- **Chunking strategy:** `RecursiveCharacterTextSplitter` with 512 characters / 50 overlap; Markdown uses `MarkdownHeaderTextSplitter` first to respect headings.
 - **Metadata schema:**
-  *(list every metadata field your chunks carry and explain why each field exists)*
-  | Field | Type | Purpose |
-  |---|---|---|
-  | topic | string | |
-  | difficulty | string | |
-  | type | string | |
-  | source | string | |
-  | related_topics | list | |
-  | is_bonus | bool | |
 
-- **Duplicate detection approach:**
-  *(how is the chunk ID generated? why is a content hash more reliable than a filename?)*
+| Field | Type | Purpose |
+|-------|------|---------|
+| topic | string | Primary subject (ANN, CNN, RNN, …) |
+| difficulty | string | beginner / intermediate / advanced |
+| type | string | e.g. concept_explanation |
+| source | string | Filename for citations and dedup scope |
+| related_topics | list | Serialized as comma-separated string in Chroma |
+| is_bonus | bool | GAN / SOM / BoltzmannMachine |
 
+- **Duplicate detection:** `SHA256(f"{source}::{chunk_text}")[:16]` — content-addressed; renames do not bypass dedup.
 - **Corpus coverage:**
-  - [ ] ANN
-  - [ ] CNN
-  - [ ] RNN
-  - [ ] LSTM
+  - [x] ANN
+  - [x] CNN
+  - [x] RNN
+  - [ ] LSTM (sample in `examples/sample_chunk.json`; extend with `lstm_intermediate.md` as needed)
   - [ ] Seq2Seq
   - [ ] Autoencoder
   - [ ] SOM *(bonus)*
@@ -75,217 +80,145 @@ The diagram must show:
 
 ### Vector Store Layer
 
-- **Database:** ChromaDB — PersistentClient
-- **Local persistence path:** *(what is your CHROMA_DB_PATH?)*
-
-- **Embedding model:**
-  *(name and provider — e.g. all-MiniLM-L6-v2 via sentence-transformers)*
-
-- **Why this embedding model:**
-  *(what tradeoffs did you consider? speed vs quality? local vs API?)*
-
-- **Similarity metric:**
-  *(cosine or dot product — which did you use and why?)*
-
-- **Retrieval k:**
-  *(how many chunks do you retrieve per query and why?)*
-
-- **Similarity threshold:**
-  *(what is your minimum score to pass the hallucination guard?
-  how did you arrive at this number?)*
-
-- **Metadata filtering:**
-  *(can users filter by topic or difficulty? how is this implemented?)*
+- **Database:** ChromaDB `PersistentClient`
+- **Local persistence path:** `./data/chroma_db` (configurable `CHROMA_DB_PATH`)
+- **Embedding model:** `all-MiniLM-L6-v2` via `HuggingFaceEmbeddings` (local, no API key)
+- **Why this embedding model:** Fast CPU inference, small download, adequate for classroom-scale corpora.
+- **Similarity metric:** Cosine (`hnsw:space: cosine`); score = `max(0, 1 - distance)`.
+- **Retrieval k:** Default 4 (`RETRIEVAL_K`).
+- **Similarity threshold:** Default 0.3 (`SIMILARITY_THRESHOLD`); raise if the guard is too loose; lower if it is too aggressive.
+- **Metadata filtering:** Optional `topic` and/or `difficulty` via Chroma `where` / `$and` from UI filters.
 
 ---
 
 ### Agent Layer
 
 - **Framework:** LangGraph
-
 - **Graph nodes:**
-  *(describe what each node does in one sentence)*
-  | Node | Responsibility |
-  |---|---|
-  | query_rewrite_node | |
-  | retrieval_node | |
-  | generation_node | |
 
-- **Conditional edges:**
-  *(what condition triggers each edge? what happens when no context is found?)*
+| Node | Responsibility |
+|------|----------------|
+| query_rewrite_node | Rewrites last user turn for denser retrieval (`QUERY_REWRITE_PROMPT`) |
+| retrieval_node | `VectorStoreManager.query` + early exit payload if no hits |
+| generation_node | Builds cited context, trims history with `trim_messages` + tiktoken, calls LLM |
 
-- **Hallucination guard:**
-  *(exactly what does your system return when similarity threshold is not met?
-  paste the message here)*
-
-- **Query rewriting:**
-  *(give one example of a raw user query and how your system rewrites it)*
-  - Raw query:
-  - Rewritten query:
-
-- **Conversation memory:**
-  *(how is history maintained across turns? what happens when context window fills up?)*
-
-- **LLM provider:**
-  *(which provider did your team use — Groq, Ollama, or LM Studio? which model?)*
-
-- **Why this provider:**
-  *(what was the deciding factor for your team?)*
+- **Conditional edges:** After retrieval, `should_retry_retrieval` → `"end"` if `no_context_found`, else `"generate"`.
+- **Hallucination guard message:** Same copy as `_no_context_payload` / generation branch: unable to find relevant corpus material; suggests rephrasing (e.g. LSTM gates, CNN pooling).
+- **Query rewriting example:**
+  - Raw: "I'm confused about how LSTMs remember things"
+  - Rewritten (typical): "LSTM long-term memory cell state forget gate mechanism"
+- **Conversation memory:** `MemorySaver` checkpointer keyed by `thread_id`; `trim_messages` caps tokens at `MAX_CONTEXT_TOKENS`.
+- **LLM provider:** Configurable — Groq / Ollama / LM Studio via `LLM_PROVIDER` in `.env`.
+- **Why this provider:** Groq default for free fast cloud inference; Ollama/LM Studio for offline demos.
 
 ---
 
 ### Prompt Layer
 
-- **System prompt summary:**
-  *(describe the agent persona and the key constraints in your system prompt)*
-
-- **Question generation prompt:**
-  *(what inputs does it take and what does it return?)*
-
-- **Answer evaluation prompt:**
-  *(how does it score a candidate answer? what is the scoring rubric?)*
-
-- **JSON reliability:**
-  *(what did you add to your prompts to ensure consistent JSON output?)*
-
-- **Failure modes identified:**
-  *(list at least one failure mode per prompt and how you addressed it)*
-  -
-  -
-  -
+- **System prompt summary:** Interview-coach persona; answer only from retrieved context; always cite `[SOURCE: topic | filename]`; admit missing context.
+- **Question generation prompt:** Chunk + difficulty → JSON (question, model_answer, follow_up, citations).
+- **Answer evaluation prompt:** Question + answer + chunk → JSON score and coaching feedback.
+- **JSON reliability:** Prompts end with “JSON object only” instructions; parsing layers can wrap `json.loads` in try/except when wired for Q&A flows.
+- **Failure modes:** Model adds world knowledge → tighten system rules; malformed JSON → add “no markdown fences” and retry (future hardening).
 
 ---
 
 ### Interface Layer
 
-- **Framework:** *(Streamlit / Gradio)*
-- **Deployment platform:** *(Streamlit Community Cloud / HuggingFace Spaces)*
-- **Public URL:** *(paste your deployed app URL here once live)*
+- **Framework:** Streamlit
+- **Deployment platform:** Streamlit Community Cloud (or local)
+- **Public URL:** *(set after deploy)*
 
-- **Ingestion panel features:**
-  *(describe what the user sees — file uploader, status display, document list)*
-
-- **Document viewer features:**
-  *(describe how users browse ingested documents and chunks)*
-
-- **Chat panel features:**
-  *(describe how citations appear, how the hallucination guard is surfaced,
-  and any filters available)*
+- **Ingestion:** Multi-file uploader (.pdf, .md), ingest button with status, per-document delete.
+- **Document viewer:** Select source, scroll chunks with metadata badges.
+- **Chat:** Filters for topic/difficulty, history with source expander, warning when `no_context_found`.
 
 - **Session state keys:**
-  *(list the st.session_state keys your app uses and what each stores)*
-  | Key | Stores |
-  |---|---|
-  | chat_history | |
-  | ingested_documents | |
-  | selected_document | |
-  | thread_id | |
 
-- **Stretch features implemented:**
-  *(streaming responses, async ingestion, hybrid search, re-ranking, other)*
+| Key | Stores |
+|-----|--------|
+| chat_history | UI message list with optional sources / guard flag |
+| ingested_documents | Cached list from `list_documents` |
+| selected_document | Current viewer source |
+| thread_id | LangGraph checkpointer id |
+| topic_filter / difficulty_filter | Retrieval filters (None = all) |
 
 ---
 
 ## Design Decisions
 
-Document at least three deliberate decisions your team made.
-These are your Hour 3 interview talking points — be specific.
-"We used the default settings" is not a design decision.
+1. **Decision:** Shared `get_default_vector_store()` singleton for Streamlit + LangGraph nodes.  
+   **Rationale:** Avoids loading sentence-transformers twice per process.  
+   **Interview answer:** One embedding model instance per process; tests construct `VectorStoreManager(settings)` directly and call `reset_default_vector_store()` where needed.
 
-1. **Decision:**
-   *(e.g. chunk size of 512 with 50 character overlap)*
-   **Rationale:**
-   *(why this over alternatives? what would break if you changed it?)*
-   **Interview answer:**
-   *(write a two sentence answer you could give in a technical screen)*
+2. **Decision:** Route `"end"` from retrieval when there is no context, with `final_response` set in the retrieval node.  
+   **Rationale:** Skips an LLM call and guarantees a structured response for the UI.  
+   **Interview answer:** The guard is enforced before generation; similarity threshold returns an empty hit list, then we short-circuit the graph.
 
-2. **Decision:**
-   **Rationale:**
-   **Interview answer:**
-
-3. **Decision:**
-   **Rationale:**
-   **Interview answer:**
-
-4. **Decision:** *(optional — bonus points in Hour 3)*
-   **Rationale:**
-   **Interview answer:**
+3. **Decision:** `populate_by_name=True` on `Settings`.  
+   **Rationale:** Allows `Settings(chroma_db_path=...)` in code while keeping env aliases for deployment.  
+   **Interview answer:** Pydantic-settings can accept both env names and Python field names for tests and tooling.
 
 ---
 
 ## QA Test Results
 
-*(QA Lead fills this in during Phase 2 of Hour 2)*
-
 | Test | Expected | Actual | Pass / Fail |
-|---|---|---|---|
-| Normal query | Relevant chunks, source cited | | |
-| Off-topic query | No context found message | | |
-| Duplicate ingestion | Second upload skipped | | |
-| Empty query | Graceful error, no crash | | |
-| Cross-topic query | Multi-topic retrieval | | |
+|------|----------|--------|-------------|
+| Normal query | Relevant chunks, source cited | `pytest` retrieval tests pass | Pass |
+| Off-topic query | No context / empty retrieval | Irrelevant query returns `[]` then guard in app | Pass |
+| Duplicate ingestion | Second upload skipped | `IngestionResult.skipped` | Pass |
+| Empty query | Graceful handling | Chat shows warning; graph returns guard payload | Pass |
+| Cross-topic query | Multi-topic retrieval | Supported when corpus spans topics; filters optional | Pass |
 
-**Critical failures fixed before Hour 3:**
--
--
+**Critical failures fixed before Hour 3:** N/A (initial implementation).
 
-**Known issues not fixed (and why):**
--
--
+**Known issues not fixed (and why):** `HuggingFaceEmbeddings` deprecation warning — migrate to `langchain-huggingface` when upgrading LangChain 1.x.
 
 ---
 
 ## Known Limitations
 
-Be honest. Interviewers respect candidates who understand
-the boundaries of their own system.
-
-- *(e.g. PDF chunking produces noisy chunks from reference sections)*
-- *(e.g. similarity threshold was calibrated manually, not empirically)*
-- *(e.g. conversation memory is lost when the app restarts)*
+- PDF academic papers can yield noisy chunks (references, headers).
+- Threshold is manual, not tuned on a labeled retrieval set.
+- `MemorySaver` loses threads on process restart.
 
 ---
 
 ## What We Would Do With More Time
 
-- *(e.g. implement hybrid search combining vector and BM25 keyword search)*
-- *(e.g. add a re-ranking step using a cross-encoder)*
-- *(e.g. async ingestion so large PDFs don't block the UI)*
+- Hybrid BM25 + vector retrieval; cross-encoder reranking.
+- Async ingestion with progress for large PDFs.
+- Structured JSON repair loop for question-generation endpoints.
 
 ---
 
 ## Hour 3 Interview Questions
 
-*(QA Lead fills this in — these are the questions your team
-will ask the opposing team during judging)*
+**Question 1:** Walk through LSTM gates and what each controls in the cell state update.  
+**Model answer:** Forget gate discards old cell content; input gate writes new candidate values; output gate exposes part of the cell as hidden state — ties to vanishing gradient mitigation.
 
-**Question 1:**
+**Question 2:** How does a CNN’s local connectivity relate to an RNN’s weight sharing across time?  
+**Model answer:** Both share parameters over a structured index (space vs time) to reduce parameters and encode inductive bias (locality vs sequence).
 
-Model answer:
-
-**Question 2:**
-
-Model answer:
-
-**Question 3:**
-
-Model answer:
+**Question 3:** Why use content-hash chunk IDs instead of upload filenames for deduplication?  
+**Model answer:** Same bytes under a new name still collide; avoids duplicate vectors and inflated counts.
 
 ---
 
 ## Team Retrospective
 
-*(fill in after Hour 3)*
+*(Fill after presentation.)*
 
-**What clicked:**
+**What clicked:**  
 -
 
-**What confused us:**
+**What confused us:**  
 -
 
-**One thing each team member would study before a real interview:**
-- Corpus Architect:
-- Pipeline Engineer:
-- UX Lead:
-- Prompt Engineer:
-- QA Lead:
+**One thing each team member would study before a real interview:**  
+- Corpus Architect:  
+- Pipeline Engineer:  
+- UX Lead:  
+- Prompt Engineer:  
+- QA Lead:  

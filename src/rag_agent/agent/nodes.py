@@ -12,15 +12,72 @@ PEP 8 | OOP | Single Responsibility
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
+import tiktoken
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, trim_messages
+from loguru import logger
 
 from rag_agent.agent.prompts import (
-    QUESTION_GENERATION_PROMPT,
+    QUERY_REWRITE_PROMPT,
     SYSTEM_PROMPT,
 )
-from rag_agent.agent.state import AgentResponse, AgentState, RetrievedChunk
+from rag_agent.agent.state import AgentResponse, AgentState, ChunkMetadata, RetrievedChunk
 from rag_agent.config import LLMFactory, get_settings
-from rag_agent.vectorstore.store import VectorStoreManager
+from rag_agent.vectorstore.store import get_default_vector_store
+
+
+def _state_get(state: Any, key: str, default: Any = None) -> Any:
+    """Read graph state: dict, mappingproxy, UserDict, etc. — not always ``dict``."""
+    if isinstance(state, Mapping):
+        return state.get(key, default)
+    return getattr(state, key, default)
+
+
+def _retrieved_chunks_from_state(state: Any) -> list[RetrievedChunk]:
+    """Normalize chunks after checkpoint/serialization (dict or dataclass)."""
+    raw = _state_get(state, "retrieved_chunks") or []
+    out: list[RetrievedChunk] = []
+    for item in raw:
+        if isinstance(item, RetrievedChunk):
+            out.append(item)
+        elif isinstance(item, Mapping):
+            meta = item.get("metadata") or {}
+            out.append(
+                RetrievedChunk(
+                    chunk_id=str(item.get("chunk_id", "")),
+                    chunk_text=str(item.get("chunk_text", "")),
+                    metadata=ChunkMetadata.from_dict(meta)
+                    if isinstance(meta, Mapping)
+                    else meta,
+                    score=float(item.get("score", 0.0)),
+                )
+            )
+    return out
+
+
+def _no_context_payload(rewritten_query: str) -> dict:
+    """State updates when nothing relevant is retrieved (graph may END here)."""
+    no_context_message = (
+        "I was unable to find relevant information in the corpus for your query. "
+        "This may mean the topic is not yet covered in the study material, or "
+        "your query may need to be rephrased. Please try a more specific "
+        "deep learning topic such as 'LSTM forget gate' or 'CNN pooling layers'."
+    )
+    response = AgentResponse(
+        answer=no_context_message,
+        sources=[],
+        confidence=0.0,
+        no_context_found=True,
+        rewritten_query=rewritten_query,
+    )
+    return {
+        "retrieved_chunks": [],
+        "no_context_found": True,
+        "final_response": response,
+        "messages": [AIMessage(content=no_context_message)],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -55,16 +112,32 @@ def query_rewrite_node(state: AgentState) -> dict:
     dict
         Updates: original_query, rewritten_query.
     """
-    # TODO: implement
-    # 1. Extract the latest HumanMessage from state.messages as original_query
-    # 2. Build a short prompt instructing the LLM to rewrite for vector search
-    #    Keep the rewriting prompt lightweight — this adds latency
-    # 3. Call llm.invoke() with the rewrite prompt
-    # 4. Return {"original_query": original_query, "rewritten_query": rewritten}
-    #
-    # Fallback: if rewriting fails (API error, timeout), return the original
-    # query unchanged so the graph continues gracefully
-    raise NotImplementedError
+    messages = _state_get(state, "messages") or []
+
+    def _latest_human_text() -> str:
+        for m in reversed(messages):
+            if isinstance(m, HumanMessage):
+                c = m.content
+                return c if isinstance(c, str) else str(c)
+        return ""
+
+    original_query = _latest_human_text().strip()
+    if not original_query:
+        return {"original_query": "", "rewritten_query": ""}
+
+    llm = LLMFactory(get_settings()).create()
+    prompt = QUERY_REWRITE_PROMPT.format(original_query=original_query)
+    try:
+        out = llm.invoke(prompt)
+        text = getattr(out, "content", str(out))
+        rewritten = (text if isinstance(text, str) else str(text)).strip()
+    except Exception as exc:
+        logger.warning("Query rewrite failed, using original: {}", exc)
+        rewritten = original_query
+
+    if not rewritten:
+        rewritten = original_query
+    return {"original_query": original_query, "rewritten_query": rewritten}
 
 
 # ---------------------------------------------------------------------------
@@ -95,16 +168,20 @@ def retrieval_node(state: AgentState) -> dict:
     dict
         Updates: retrieved_chunks, no_context_found.
     """
-    # TODO: implement
-    # 1. Instantiate VectorStoreManager (consider caching this)
-    # 2. manager.query(
-    #        query_text=state.rewritten_query,
-    #        topic_filter=state.topic_filter,
-    #        difficulty_filter=state.difficulty_filter
-    #    )
-    # 3. If result is empty: return {"retrieved_chunks": [], "no_context_found": True}
-    # 4. Otherwise: return {"retrieved_chunks": chunks, "no_context_found": False}
-    raise NotImplementedError
+    store = get_default_vector_store()
+    rewritten = _state_get(state, "rewritten_query") or ""
+    q = rewritten.strip()
+    if not q:
+        return _no_context_payload(rewritten)
+
+    chunks = store.query(
+        query_text=q,
+        topic_filter=_state_get(state, "topic_filter"),
+        difficulty_filter=_state_get(state, "difficulty_filter"),
+    )
+    if not chunks:
+        return _no_context_payload(rewritten)
+    return {"retrieved_chunks": chunks, "no_context_found": False}
 
 
 # ---------------------------------------------------------------------------
@@ -145,40 +222,66 @@ def generation_node(state: AgentState) -> dict:
     llm = LLMFactory(settings).create()
 
     # ---- Hallucination Guard -----------------------------------------------
-    if state.no_context_found:
-        no_context_message = (
-            "I was unable to find relevant information in the corpus for your query. "
-            "This may mean the topic is not yet covered in the study material, or "
-            "your query may need to be rephrased. Please try a more specific "
-            "deep learning topic such as 'LSTM forget gate' or 'CNN pooling layers'."
-        )
-        response = AgentResponse(
-            answer=no_context_message,
-            sources=[],
-            confidence=0.0,
-            no_context_found=True,
-            rewritten_query=state.rewritten_query,
-        )
-        return {
-            "final_response": response,
-            "messages": [AIMessage(content=no_context_message)],
-        }
+    if _state_get(state, "no_context_found"):
+        return _no_context_payload(_state_get(state, "rewritten_query") or "")
 
-    # ---- Build Context from Retrieved Chunks --------------------------------
-    # TODO: implement
-    # 1. Format retrieved chunks into a context string with citations
-    #    Each chunk should appear as: "[SOURCE: topic | file]\n{chunk_text}\n"
-    # 2. Calculate average confidence score from chunk scores
-    # 3. Build the full prompt:
-    #    - SystemMessage with SYSTEM_PROMPT
-    #    - Context message with formatted chunks
-    #    - Trimmed conversation history (trim to max_context_tokens)
-    #    - HumanMessage with original_query
-    # 4. llm.invoke(messages)
-    # 5. Construct AgentResponse with answer, sources (list of citations), confidence
-    # 6. Append AIMessage to messages
-    # 7. Return {"final_response": response, "messages": [new_ai_message]}
-    raise NotImplementedError
+    enc = tiktoken.get_encoding("cl100k_base")
+
+    def _token_counter(msgs: list) -> int:
+        total = 0
+        for m in msgs:
+            c = m.content if isinstance(m.content, str) else str(m.content)
+            total += len(enc.encode(c))
+        return total
+
+    chunks_list = _retrieved_chunks_from_state(state)
+    context_parts = []
+    for ch in chunks_list:
+        cite = f"[SOURCE: {ch.metadata.topic} | {ch.metadata.source}]"
+        context_parts.append(f"{cite}\n{ch.chunk_text}")
+    context_block = "\n\n---\n\n".join(context_parts)
+    avg_conf = (
+        sum(c.score for c in chunks_list) / len(chunks_list) if chunks_list else 0.0
+    )
+    sources = [c.to_citation() for c in chunks_list]
+
+    history = list(_state_get(state, "messages") or [])
+    trimmed = trim_messages(
+        history,
+        max_tokens=settings.max_context_tokens,
+        strategy="last",
+        token_counter=_token_counter,
+        include_system=True,
+        start_on="human",
+        allow_partial=False,
+    )
+
+    llm = LLMFactory(settings).create()
+    user_q = _state_get(state, "original_query") or ""
+    prompt_messages = [
+        SystemMessage(
+            content=(
+                f"{SYSTEM_PROMPT}\n\n"
+                f"Retrieved context from the corpus (cite using [SOURCE: topic | filename]):\n\n"
+                f"{context_block}"
+            )
+        ),
+        *trimmed,
+        HumanMessage(content=user_q),
+    ]
+    ai = llm.invoke(prompt_messages)
+    answer_text = ai.content if isinstance(ai.content, str) else str(ai.content)
+    response = AgentResponse(
+        answer=answer_text,
+        sources=sources,
+        confidence=avg_conf,
+        no_context_found=False,
+        rewritten_query=_state_get(state, "rewritten_query") or "",
+    )
+    return {
+        "final_response": response,
+        "messages": [AIMessage(content=answer_text)],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +317,6 @@ def should_retry_retrieval(state: AgentState) -> str:
     Retry logic should be limited to one attempt to prevent infinite loops.
     Track retry count in AgentState if implementing retry behaviour.
     """
-    # TODO: implement
-    # Simple version: if no_context_found → "end", else → "generate"
-    # Advanced version: track retry count, allow one retry with broader query
-    raise NotImplementedError
+    if _state_get(state, "no_context_found"):
+        return "end"
+    return "generate"
