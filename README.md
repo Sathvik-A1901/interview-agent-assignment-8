@@ -109,13 +109,13 @@ and why.
 Before doing anything else, confirm your role with your team.
 Then jump directly to your role's section below.
 
-| Role | You Own | Go To |
-|---|---|---|
-| **Corpus Architect** | `data/corpus/` | [→ Corpus Architect](#corpus-architect) |
-| **Pipeline Engineer** | `config.py`, `store.py`, `nodes.py`, `graph.py` | [→ Pipeline Engineer](#pipeline-engineer) |
-| **UX Lead** | `ui/app.py` | [→ UX Lead](#ux-lead) |
-| **Prompt Engineer** | `prompts.py` | [→ Prompt Engineer](#prompt-engineer) |
-| **QA Lead** | `tests/`, demo script | [→ QA Lead](#qa-lead) |
+| Role | You Own | Go To | Name |
+|---|---|---|---|
+| **Corpus Architect** | `data/corpus/` | [→ Corpus Architect](#corpus-architect) | SAI BHARGAV YAGA |
+| **Pipeline Engineer** | `config.py`, `store.py`, `nodes.py`, `graph.py` | [→ Pipeline Engineer](#pipeline-engineer) | SATHVIK ADDICHARLA |
+| **UX Lead** | `ui/app.py` | [→ UX Lead](#ux-lead) | SRI NIKESH MUCHA |
+| **Prompt Engineer** | `prompts.py` | [→ Prompt Engineer](#prompt-engineer) | VENKATA SATYA ABHI MADHAV NALLAMILLI |
+| **QA Lead** | `tests/`, demo script | [→ QA Lead](#qa-lead) | TARUN REDDY MARREDDY |
 
 ---
 
