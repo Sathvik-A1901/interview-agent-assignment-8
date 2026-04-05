@@ -8,10 +8,11 @@ Built with **LangChain + LangGraph + ChromaDB** and a simple **Streamlit UI**.
 
 ## Demo
 
-Screen recording: `docs/demo.mp4` (H.264 `.mp4` recommended). Raw URL for reference:  
-https://raw.githubusercontent.com/Sathvik-A1901/Interview-begins/main/docs/demo.mp4
+Screen recording: `docs/demo.mp4` (stored with **Git LFS** because it is large). The README player must use GitHub’s media CDN (the `raw.githubusercontent.com` URL only serves the LFS pointer for this file):
 
-<video src="https://raw.githubusercontent.com/Sathvik-A1901/Interview-begins/main/docs/demo.mp4" controls playsinline width="100%">
+https://media.githubusercontent.com/media/Sathvik-A1901/Interview-begins/refs/heads/main/docs/demo.mp4
+
+<video src="https://media.githubusercontent.com/media/Sathvik-A1901/Interview-begins/refs/heads/main/docs/demo.mp4" controls playsinline width="100%">
   Your browser does not support the video tag.
 </video>
 
