@@ -9,9 +9,9 @@ Built with **LangChain + LangGraph + ChromaDB** and a simple **Streamlit UI**.
 ## Demo
 
 Screen recording: `docs/demo.mp4` (H.264 `.mp4` recommended). Raw URL for reference:  
-https://raw.githubusercontent.com/Sathvik-A1901/interview-agent-assignment-8/main/docs/demo.mp4
+https://raw.githubusercontent.com/Sathvik-A1901/Interview-begins/main/docs/demo.mp4
 
-<video src="https://raw.githubusercontent.com/Sathvik-A1901/interview-agent-assignment-8/main/docs/demo.mp4" controls playsinline width="100%">
+<video src="https://raw.githubusercontent.com/Sathvik-A1901/Interview-begins/main/docs/demo.mp4" controls playsinline width="100%">
   Your browser does not support the video tag.
 </video>
 
