@@ -6,6 +6,23 @@ Built with **LangChain + LangGraph + ChromaDB** and a simple **Streamlit UI**.
 
 ---
 
+## Demo
+
+Screen recording: `docs/demo.mp4` (H.264 `.mp4` recommended). Raw URL for reference:  
+https://raw.githubusercontent.com/Sathvik-A1901/interview-agent-assignment-8/main/docs/demo.mp4
+
+<video src="https://raw.githubusercontent.com/Sathvik-A1901/interview-agent-assignment-8/main/docs/demo.mp4" controls playsinline width="100%">
+  Your browser does not support the video tag.
+</video>
+
+**Alternative — YouTube (no large file in git):** replace `VIDEO_ID` and use a thumbnail link:
+
+```markdown
+[![Watch the demo](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=VIDEO_ID)
+```
+
+---
+
 ## What you can do
 
 - **Ingest** markdown-based study notes from `data/corpus/`
@@ -138,6 +155,7 @@ deep-learning-rag-agent/
 │   ├── corpus/                 ← markdown study notes live here
 │   └── chroma_db/              ← local DB (gitignored)
 ├── docs/
+│   ├── demo.mp4                ← README demo video (add locally, then commit)
 │   ├── architecture.md
 │   └── rubric.md
 ├── examples/
